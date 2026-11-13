@@ -99,6 +99,7 @@ export const registerUser = async (req, res) => {
       name: name.trim(),
       email: normalizedEmail,
       password: hashedPassword,
+      role: "patient",
     });
 
     // Record successful registration
