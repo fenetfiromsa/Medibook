@@ -1,8 +1,9 @@
-
+import crypto from "crypto";
+import User from "../models/User.js";
+import { sendEmail } from "../utils/emailService.js";
 import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
-import User from "../models/User.js";
 import AuditLog from "../models/AuditLog.js";
 
 // Create a JWT for the authenticated user
@@ -15,6 +16,7 @@ const generateToken = (user) => {
     {
       userId: user._id,
       role: user.role,
+      tokenVersion: user.tokenVersion,
     },
     process.env.JWT_SECRET,
     {
@@ -101,6 +103,7 @@ export const registerUser = async (req, res) => {
       password: hashedPassword,
       role: "patient",
     });
+    await sendVerificationEmail(user);
 
     // Record successful registration
     await createAuditLog({
@@ -141,6 +144,7 @@ export const registerUser = async (req, res) => {
     });
   }
 };
+
 
 // =====================================
 // LOGIN USER
@@ -187,6 +191,11 @@ export const loginUser = async (req, res) => {
         message: "This account is disabled",
       });
     }
+    if (!user.isEmailVerified) {
+      return res.status(403).json({
+        message: "Please verify your email before logging in.",
+      });
+    } 
 
     // Check whether the account is locked
     if (user.lockUntil && user.lockUntil > new Date()) {
@@ -273,4 +282,195 @@ export const loginUser = async (req, res) => {
       message: "Server error during login",
     });
   }
+};
+
+export const requestPasswordReset = async (req, res) => {
+  try {
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        message: "Email is required.",
+      });
+    }
+
+    const user = await User.findOne({
+      email: email.toLowerCase().trim(),
+    });
+
+    // Use the same response whether or not the account exists.
+    if (!user) {
+      return res.status(200).json({
+        message: "If the account exists, a reset email will be sent.",
+      });
+    }
+
+    const rawToken = crypto.randomBytes(32).toString("hex");
+
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(rawToken)
+      .digest("hex");
+
+    user.passwordResetToken = hashedToken;
+
+    user.passwordResetExpires =
+      Date.now() + 15 * 60 * 1000;
+
+    await user.save();
+
+    const resetUrl =
+      `${process.env.FRONTEND_URL}/reset-password/${rawToken}`;
+
+    try {
+      await sendEmail({
+        to: user.email,
+        subject: "MediBook Password Reset",
+        html: `
+          <h2>Password Reset</h2>
+          <p>You requested a password reset.</p>
+          <p>This link expires in 15 minutes.</p>
+          <a href="${resetUrl}">Reset Password</a>
+        `,
+      });
+    } catch (emailError) {
+      user.passwordResetToken = null;
+      user.passwordResetExpires = null;
+      await user.save();
+
+      throw emailError;
+    }
+
+    return res.status(200).json({
+      message: "If the account exists, a reset email will be sent.",
+    });
+
+  } catch (error) {
+    console.error("Password reset request error:", error.message);
+
+    return res.status(500).json({
+      message: "Unable to process password reset.",
+    });
+  }
+};
+
+
+export const resetPassword = async (req, res) => {
+  try {
+    const { token } = req.params;
+    const { password } = req.body;
+
+    if (!password || password.length < 8) {
+      return res.status(400).json({
+        message: "Password must contain at least 8 characters.",
+      });
+    }
+
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(token)
+      .digest("hex");
+
+    const user = await User.findOne({
+      passwordResetToken: hashedToken,
+      passwordResetExpires: { $gt: Date.now() },
+    }).select("+password");
+
+    if (!user) {
+      return res.status(400).json({
+        message: "Invalid or expired reset link.",
+      });
+    }
+
+    user.password = await bcrypt.hash(password, 12);
+
+    user.passwordResetToken = null;
+    user.passwordResetExpires = null;
+
+    // Reset failed login attempts after a successful password reset.
+    user.failedLoginAttempts = 0;
+    user.lockUntil = null;
+    user.tokenVersion += 1;
+
+    await user.save();
+
+    return res.status(200).json({
+      message: "Password reset successful. Please log in again.",
+    });
+
+  } catch (error) {
+    console.error("Password reset error:", error.message);
+
+    return res.status(500).json({
+      message: "Unable to reset password.",
+    });
+  }
+};
+
+export const verifyEmail = async (req, res) => {
+  try {
+    const { token } = req.params;
+
+    const hashedToken = crypto
+      .createHash("sha256")
+      .update(token)
+      .digest("hex");
+
+    const user = await User.findOne({
+      emailVerificationToken: hashedToken,
+      emailVerificationExpires: { $gt: Date.now() },
+    });
+
+    if (!user) {
+      return res.status(400).json({
+        message: "Invalid or expired verification link.",
+      });
+    }
+
+    user.isEmailVerified = true;
+    user.emailVerificationToken = null;
+    user.emailVerificationExpires = null;
+
+    await user.save();
+
+    return res.status(200).json({
+      message: "Email verified successfully.",
+    });
+
+  } catch (error) {
+    console.error("Email verification error:", error.message);
+
+    return res.status(500).json({
+      message: "Unable to verify email.",
+    });
+  }
+};
+export const sendVerificationEmail = async (user) => {
+  const rawToken = crypto.randomBytes(32).toString("hex");
+
+  const hashedToken = crypto
+    .createHash("sha256")
+    .update(rawToken)
+    .digest("hex");
+
+  user.emailVerificationToken = hashedToken;
+
+  user.emailVerificationExpires =
+    Date.now() + 24 * 60 * 60 * 1000;
+
+  await user.save();
+
+  const verificationUrl =
+    `${process.env.FRONTEND_URL}/verify-email/${rawToken}`;
+
+  await sendEmail({
+    to: user.email,
+    subject: "Verify your MediBook email",
+    html: `
+      <h2>Welcome to MediBook</h2>
+      <p>Please verify your email address.</p>
+      <p>This link expires in 24 hours.</p>
+      <a href="${verificationUrl}">Verify Email</a>
+    `,
+  });
 };

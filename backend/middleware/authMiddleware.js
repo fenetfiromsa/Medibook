@@ -28,6 +28,11 @@ export const protect = async (req, res, next) => {
 
     // Find the user in MongoDB
     const user = await User.findById(decoded.id);
+    if (decoded.tokenVersion !== user.tokenVersion) {
+      return res.status(401).json({
+        message: "Session expired. Please log in again.",
+      });
+    }
 
     // Check whether the account exists
     if (!user) {

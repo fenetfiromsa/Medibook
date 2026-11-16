@@ -1,8 +1,10 @@
 import { useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../context/AuthContext";
+import ReCAPTCHA from "react-google-recaptcha";
 
 const Register = () => {
+  const [captchaToken, setCaptchaToken] = useState(null);
   const { register } = useAuth();
   const navigate = useNavigate();
 
@@ -24,12 +26,19 @@ const Register = () => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!captchaToken) {
+      setError("Please complete the CAPTCHA.");
+      return;
+    }
 
     setError("");
     setLoading(true);
 
     try {
-      await register(formData);
+      await register({
+        ...formData,
+        captchaToken,
+      });
       navigate("/dashboard");
     } catch (err) {
       setError(
@@ -78,7 +87,12 @@ const Register = () => {
           minLength={8}
           required
         />
-
+        <ReCAPTCHA
+          sitekey={import.meta.env.VITE_RECAPTCHA_SITE_KEY}
+          onChange={(value) => setCaptchaToken(value)}
+          onExpired={() => setCaptchaToken(null)}
+        />
+        
         <button type="submit" disabled={loading}>
           {loading ? "Creating Account..." : "Register"}
         </button>

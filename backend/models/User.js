@@ -40,8 +40,31 @@ const userSchema = new mongoose.Schema(
       type: Boolean,
       default: true, // initially active
     },
+    tokenVersion: {
+      type: Number,
+      default: 0,
+    },
 
     isEmailVerified: {
+      passwordResetToken: {
+      type: String,
+      default: null,
+    },
+
+    passwordResetExpires: {
+      type: Date,
+      default: null,
+    },
+
+    emailVerificationToken: {
+      type: String,
+      default: null,
+    },
+
+    emailVerificationExpires: {
+      type: Date,
+      default: null,
+    },
       type: Boolean,
       default: false, // initially not verified
     },
@@ -55,6 +78,7 @@ const userSchema = new mongoose.Schema(
       type: Date,
       default: null,
     },
+    
   },
   {
     timestamps: true,//created at and updated at 
